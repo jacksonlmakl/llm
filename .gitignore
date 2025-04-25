@@ -3,5 +3,7 @@ file_registry.json
 .ipynb_checkpoints
 __pycache__
 env
-*.ipynb
+Example.ipynb
 vector_store
+Example.ipynb
+*.ipynb
