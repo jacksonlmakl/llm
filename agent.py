@@ -27,3 +27,8 @@ class Agent:
         else:
             outputs=self.model.chat(f"{prompt}",stream)
         return outputs
+    def summarize(self):
+        self.chat("Please create a detailed summary of our entire conversation and your responses",rag=False)
+        summary=self.model.messages[-1]['content']
+        self.model.clear()
+        self.model.messages=[{"role":"system","content":f"You are a helpful assistant very good at language, parsing, and understanding text, here is a summary of your previous conversation to reference \n\n----- \n\n{summary}"}]
