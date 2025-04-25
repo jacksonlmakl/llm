@@ -1,11 +1,14 @@
 from model import Model
 from rag import RAG
 import logging
-
+import warnings
 
 class Agent:
     def __init__(self, token, model_id="meta-llama/Llama-3.2-1B-Instruct", messages=None):
         logging.disable(logging.CRITICAL)  # Disable all logging
+        
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        warnings.filterwarnings("ignore", category=UserWarning)
         if type(messages) == list:
             self.messages = messages
         else:
