@@ -21,3 +21,4 @@ CMD ["python", "api.py"]
 
 #Manual Docker CLI Build Commands
 # docker build -t api .
+# docker run -p 5000:5000 api
