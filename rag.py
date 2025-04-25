@@ -15,6 +15,9 @@ from langchain.docstore.document import Document
 from transformers import pipeline
 from tqdm import tqdm
 import logging
+import hashlib
+import json
+import time
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -40,29 +43,101 @@ class DocumentProcessor:
         # Initialize Tesseract for OCR (make sure tesseract is installed)
         pytesseract.pytesseract.tesseract_cmd = r'tesseract'  # Update this path if needed
         
-    def process_directory(self):
-        """Process all files in the directory and extract text"""
+        # Track processed files for incremental updates
+        self.processed_files = {}
+        
+    def load_file_registry(self, registry_path):
+        """Load the registry of processed files"""
+        if os.path.exists(registry_path):
+            try:
+                with open(registry_path, 'r') as f:
+                    self.processed_files = json.load(f)
+                logger.info(f"Loaded registry with {len(self.processed_files)} processed files")
+                return True
+            except Exception as e:
+                logger.error(f"Error loading file registry: {str(e)}")
+        return False
+    
+    def save_file_registry(self, registry_path):
+        """Save the registry of processed files"""
+        try:
+            with open(registry_path, 'w') as f:
+                json.dump(self.processed_files, f)
+            logger.info(f"Saved registry with {len(self.processed_files)} processed files")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving file registry: {str(e)}")
+            return False
+            
+    def get_file_hash(self, filepath):
+        """Get hash of file to detect changes"""
+        try:
+            file_stat = os.stat(filepath)
+            # Use modified time and size as a quick hash
+            return f"{file_stat.st_mtime}_{file_stat.st_size}"
+        except Exception as e:
+            logger.error(f"Error getting file hash for {filepath}: {str(e)}")
+            return None
+    
+    def process_directory(self, registry_path):
+        """Process all files in the directory and extract text, skipping already processed files"""
         logger.info(f"Processing directory: {self.directory_path}")
         
         if not os.path.exists(self.directory_path):
             logger.error(f"Directory not found: {self.directory_path}")
             return False
+        
+        # Load registry of processed files
+        self.load_file_registry(registry_path)
             
         file_count = 0
+        new_files_count = 0
+        updated_files_count = 0
         
         for filename in tqdm(os.listdir(self.directory_path)):
             filepath = os.path.join(self.directory_path, filename)
             if os.path.isfile(filepath):
                 try:
+                    # Get file hash to detect changes
+                    file_hash = self.get_file_hash(filepath)
+                    
+                    # Skip if file hasn't changed
+                    if filename in self.processed_files and self.processed_files[filename]["hash"] == file_hash:
+                        # Add the already processed content to documents list
+                        self.documents.append(Document(
+                            page_content=self.processed_files[filename]["content"], 
+                            metadata={"source": filename}
+                        ))
+                        file_count += 1
+                        continue
+                    
+                    # Process the file if it's new or changed
                     file_extension = os.path.splitext(filename)[1].lower()
                     text = self.extract_text(filepath, file_extension)
+                    
                     if text:
                         self.documents.append(Document(page_content=text, metadata={"source": filename}))
                         file_count += 1
+                        
+                        # Update the registry
+                        if filename in self.processed_files:
+                            updated_files_count += 1
+                        else:
+                            new_files_count += 1
+                            
+                        self.processed_files[filename] = {
+                            "hash": file_hash,
+                            "content": text,
+                            "processed_time": time.time()
+                        }
                 except Exception as e:
                     logger.error(f"Error processing {filename}: {str(e)}")
         
-        logger.info(f"Successfully processed {file_count} files")
+        # Save the updated registry
+        self.save_file_registry(registry_path)
+        
+        logger.info(f"Successfully processed {file_count} files in total")
+        logger.info(f"New files: {new_files_count}, Updated files: {updated_files_count}")
         return True
     
     def extract_text(self, filepath, file_extension):
@@ -85,7 +160,9 @@ class DocumentProcessor:
             logger.warning(f"Unsupported file type: {file_extension}")
             return None
     
+    # All the extraction methods remain the same
     def extract_from_txt(self, filepath):
+        # Same implementation as before
         try:
             with open(filepath, 'r', encoding='utf-8', errors='ignore') as file:
                 return file.read()
@@ -94,6 +171,7 @@ class DocumentProcessor:
             return ""
     
     def extract_from_pdf(self, filepath):
+        # Same implementation as before
         try:
             text = ""
             with open(filepath, 'rb') as file:
@@ -108,6 +186,7 @@ class DocumentProcessor:
             logger.error(f"Error extracting text from PDF {filepath}: {str(e)}")
             return ""
     
+    # Other extraction methods remain the same...
     def extract_from_docx(self, filepath):
         try:
             return docx2txt.process(filepath)
@@ -188,8 +267,8 @@ class DocumentProcessor:
             logger.error(f"Error extracting text from image {filepath}: {str(e)}")
             return ""
     
-    def create_vector_store(self, save_path=None):
-        """Create a vector store from chunked documents"""
+    def create_vector_store(self, save_path=None, update_existing=False):
+        """Create or update a vector store from chunked documents"""
         if not self.documents:
             logger.warning("No documents to process.")
             return None
@@ -210,13 +289,25 @@ class DocumentProcessor:
             logger.warning("No chunks created.")
             return None
             
-        logger.info("Creating vector store...")
-        vector_store = FAISS.from_documents(chunked_docs, self.embeddings)
-        
-        # Save the vector store if a path is provided
-        if save_path:
-            logger.info(f"Saving vector store to {save_path}")
-            vector_store.save_local(save_path)
+        # Create or update vector store
+        if update_existing and save_path and os.path.exists(os.path.join(save_path, "index.faiss")):
+            logger.info(f"Loading existing vector store from {save_path}")
+            vector_store = FAISS.load_local(save_path, self.embeddings, allow_dangerous_deserialization=True)
+            
+            # Add new documents to existing vector store
+            if chunked_docs:
+                logger.info(f"Updating vector store with {len(chunked_docs)} new chunks")
+                vector_store.add_documents(chunked_docs)
+                # Save the updated vector store
+                vector_store.save_local(save_path)
+        else:
+            logger.info("Creating new vector store...")
+            vector_store = FAISS.from_documents(chunked_docs, self.embeddings, allow_dangerous_deserialization=True)
+            
+            # Save the vector store if a path is provided
+            if save_path:
+                logger.info(f"Saving vector store to {save_path}")
+                vector_store.save_local(save_path)
         
         return vector_store
 
@@ -225,11 +316,11 @@ class RAGSystem:
         """Initialize the RAG system"""
         if vector_store:
             self.vector_store = vector_store
-        elif vector_store_path:
+        elif vector_store_path and os.path.exists(os.path.join(vector_store_path, "index.faiss")):
             self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-            self.vector_store = FAISS.load_local(vector_store_path, self.embeddings)
+            self.vector_store = FAISS.load_local(vector_store_path, self.embeddings, allow_dangerous_deserialization=True)
         else:
-            raise ValueError("Either vector_store or vector_store_path must be provided")
+            raise ValueError("Either vector_store or a valid vector_store_path must be provided")
     
     def query(self, prompt, k=5):
         """
@@ -275,21 +366,37 @@ class RAGSystem:
         return enriched_prompt
 
         
-def RAG(prompt,directory_path = "documents",vector_store_path = "vector_store"):
-    # Process documents and create vector store
+def RAG(prompt, directory_path="documents", vector_store_path="vector_store", file_registry_path="file_registry.json"):
+    """
+    Retrieval-Augmented Generation function that only processes new or changed files
+    
+    Args:
+        prompt: The user's prompt/question
+        directory_path: Path to the directory containing documents
+        vector_store_path: Path to save/load the vector store
+        file_registry_path: Path to save/load the file registry
+        
+    Returns:
+        Enriched prompt with relevant context
+    """
+    # Check if vector store exists
+    vector_store_exists = os.path.exists(os.path.join(vector_store_path, "index.faiss"))
+    
+    # Process documents and create/update vector store
     processor = DocumentProcessor(directory_path)
-    processor.process_directory()
-    vector_store = processor.create_vector_store(save_path=vector_store_path)
+    
+    # Process the directory, skipping unchanged files
+    processor.process_directory(file_registry_path)
+    
+    # Create or update vector store
+    vector_store = processor.create_vector_store(
+        save_path=vector_store_path,
+        update_existing=vector_store_exists
+    )
     
     # Create RAG system
     rag_system = RAGSystem(vector_store=vector_store)
     
-    # Example query function
-    def query_rag(prompt):
-        """Query the RAG system with a prompt"""
-        return rag_system.query(prompt).replace("\n","").strip()
-    
-    # Test with a query
-    # prompt = "tell me about airbnb?"
-    enriched_prompt = query_rag(prompt)
+    # Query the RAG system
+    enriched_prompt = rag_system.query(prompt).replace("\n","").strip()
     return enriched_prompt
