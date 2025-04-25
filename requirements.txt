@@ -16,3 +16,4 @@ PyPDF2
 openpyxl
 pandas
 argparse
+flask-session
