@@ -2,9 +2,13 @@ from model import Model
 from rag import RAG
 import logging
 import warnings
+from dotenv import load_dotenv
+import os
 
 class Agent:
-    def __init__(self, token, model_id="meta-llama/Llama-3.2-1B-Instruct", messages=None):
+    def __init__(self, model_id="meta-llama/Llama-3.2-1B-Instruct", messages=None):
+        load_dotenv()
+        token=os.getenv('HF_API_KEY')
         logging.disable(logging.CRITICAL)  # Disable all logging
         
         warnings.filterwarnings("ignore", category=DeprecationWarning)

@@ -302,7 +302,7 @@ class DocumentProcessor:
                 vector_store.save_local(save_path)
         else:
             logger.info("Creating new vector store...")
-            vector_store = FAISS.from_documents(chunked_docs, self.embeddings, allow_dangerous_deserialization=True)
+            vector_store = FAISS.from_documents(chunked_docs, self.embeddings)
             
             # Save the vector store if a path is provided
             if save_path:
