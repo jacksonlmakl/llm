@@ -20,5 +20,5 @@ EXPOSE 5000
 CMD ["python", "api.py"]
 
 #Manual Docker CLI Build Commands
-# docker build -t api .
+# docker build -t api . --no-cache
 # docker run -p 5000:5000 api
